@@ -25,6 +25,15 @@ jobs:
           yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
           "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "build-tools;36.0.0" "platforms;android-36" >/dev/null
 
+      # Signing key, in order of preference: the AMTV_KEYSTORE_B64 secret; a keystore kept in the
+      # Actions cache (stable while builds happen at least weekly); else a fresh one (then the app
+      # must be uninstalled before the next build installs).
+      - name: Restore cached signing key
+        id: kscache
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: amtv-signing-keystore-v1
       - name: Prepare signing key
         env:
           KEYSTORE_B64: ${{ secrets.AMTV_KEYSTORE_B64 }}
@@ -33,11 +42,13 @@ jobs:
           if [ -n "$KEYSTORE_B64" ]; then
             echo "$KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
             echo "Using the AMTV_KEYSTORE_B64 secret (stable signature; updates install in place)."
+          elif [ -s "$HOME/.android/debug.keystore" ]; then
+            echo "Using the cached signing key."
           else
             keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android \
               -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=AMTV fork, O=lsheardo, C=CA"
-            echo "::warning::No AMTV_KEYSTORE_B64 secret: generated a one-off key. Add the secret so future builds can update in place."
+            echo "::warning::Generated a new signing key (no secret, no cache). Installing over an older build needs an uninstall first."
           fi
 
       - name: Build
@@ -51,6 +62,27 @@ jobs:
           name: amtv-apk
           path: build/amtv-*.apk
           if-no-files-found: error
+
+      # A plain download link that needs no GitHub login or release:
+      # https://github.com/<owner>/<repo>/raw/apk-builds/amtv-luke-fixes.apk
+      - name: Publish APK to the apk-builds branch
+        if: github.ref == 'refs/heads/luke-fixes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          mkdir -p /tmp/apk-builds && cd /tmp/apk-builds
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q origin apk-builds 2>/dev/null; then git checkout -q -b apk-builds FETCH_HEAD; else git checkout -q --orphan apk-builds; fi
+          cp "$GITHUB_WORKSPACE/build/amtv.apk" amtv-luke-fixes.apk
+          sha256sum amtv-luke-fixes.apk > amtv-luke-fixes.apk.sha256
+          printf 'source: %s@%s\nbuilt: %s\n' "$GITHUB_REF_NAME" "$GITHUB_SHA" "$(date -u +%FT%TZ)" > BUILD.txt
+          git add -A
+          git commit -q -m "APK from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}" || { echo "nothing changed"; exit 0; }
+          git push -q origin apk-builds
 
       - name: Release on tag
         if: startsWith(github.ref, 'refs/tags/v')
