@@ -1259,7 +1259,15 @@ h2 { font-size: 18px; font-weight: 600; margin: 0 48px 4px; color: #f2f2f5; whit
     s.page.append(h('h1', { style: 'margin-top:150px;text-align:center' }, 'Apple Music'),
       h('div', { class: 'msg', style: 'text-align:center' }, T.t('Откроется вход Apple: ↑ ↓ — выбрать поле или кнопку, OK — ввести или нажать.')),
       h('div', { class: 'row', style: 'display:flex;justify-content:center' },
-        h('div', { class: 'btn red f', onok: () => { T.hide(); T.mk().authorize().catch(() => {}); } }, T.t('Войти'))));
+        // Apple's own in-page sign-in (the site's Sign In button opens an idmsa frame on the page) keeps
+        // the session. MusicKit's authorize() popup hands over a token that the page drops in the same
+        // second (seen 5 of 5 times with a Canadian account; the in-page sign-in stuck 2 of 2).
+        h('div', { class: 'btn red f', onok: () => {
+          T.hide();
+          const b = [...document.querySelectorAll('button, a')].find((x) => /^\s*sign in\s*$/i.test(x.textContent || ''));
+          if (b) { b.click(); T.toast(T.t('Use the pointer to sign in on Apple\'s page; Back returns')); }
+          else T.mk().authorize().catch(() => {});
+        } }, T.t('Войти'))));
     T.focus(s.page.querySelector('.f'));
     T.splashDone();
   };
