@@ -281,10 +281,27 @@
     cache.set(key, { t: Date.now(), p: Promise.resolve(data) });
     try { localStorage.setItem(STORE + key, JSON.stringify(data)); } catch (e) { /* quota: just not kept */ }
   }
+  // Reads under /v1/me go straight to Apple with this page's own tokens (like T.send), not through
+  // MusicKit's api.music(): on a Canadian account /v1/me/recommendations answers 403, and MusicKit
+  // treats a 403 on a /v1/me call as "the sign-in is bad" and signs the user out the moment they
+  // signed in. A direct fetch just fails that one request and the screen falls back instead.
+  async function getDirect(path, params) {
+    const mk = T.mk();
+    const url = new URL('https://amp-api.music.apple.com' + path);
+    const q = Object.assign({ l: (mk && mk.storefrontId === 'ca') ? 'en-CA' : undefined, platform: 'web' }, params || {});
+    for (const k in q) if (q[k] !== undefined) url.searchParams.set(k, q[k]);
+    const r = await fetch(url, { cache: 'no-store',
+      headers: { Authorization: 'Bearer ' + mk.developerToken, 'Music-User-Token': mk.musicUserToken, Origin: 'https://music.apple.com' } });
+    if (!r.ok) throw { errorCode: r.status, status: r.status, message: r.statusText };
+    return r.json();
+  }
   function fetchFresh(key, path, params) {
     return (async () => {
       for (let i = 0; ; i++) {
-        try { return (await T.mk().api.music(path, params || {})).data; }
+        try {
+          if (/^\/v1\/me\//.test(path)) return await getDirect(path, params);
+          return (await T.mk().api.music(path, params || {})).data;
+        }
         catch (e) {
           if (i >= 2 || !/50\d|upstream/i.test(String(e && (e.errorCode || e.status || e.message)))) throw e;
           await new Promise(r => setTimeout(r, 400 * (i + 1)));
@@ -1069,6 +1086,15 @@ h2 { font-size: 18px; font-weight: 600; margin: 0 48px 4px; color: #f2f2f5; whit
     });
   }
 
+  // After a sign-in: Apple's sign-in service answered (authReflectionDidComplete), or 8 s passed.
+  function sessionCookies(mk) {
+    return new Promise((resolve) => {
+      const done = () => { clearTimeout(t); mk.removeEventListener('authReflectionDidComplete', done); resolve(); };
+      const t = setTimeout(done, 8000);
+      mk.addEventListener('authReflectionDidComplete', done);
+    });
+  }
+
   // The first play after launch also loads Apple's hls.js, starts the Widevine module and opens fresh
   // TLS connections to the playback hosts (each costly through the tunnel): do all that up front.
   // Idle connections close after a minute or two, so this also runs when focus rests on a station.
@@ -1171,10 +1197,15 @@ h2 { font-size: 18px; font-weight: 600; margin: 0 48px 4px; color: #f2f2f5; whit
     T.status(mk.isAuthorized ? T.t('Собираю главную…') : T.t('Нужен вход в Apple ID'));
     T.on('playbackStateDidChange', onState);
     onState();
-    T.on('authorizationStatusDidChange', () => {
+    T.on('authorizationStatusDidChange', async () => {
       diag(Object.assign({ ev: mk.isAuthorized ? 'signed-in' : 'signed-out' }, mkState(mk)));
       clearTimeout(outTimer);
       if (!mk.isAuthorized) { outTimer = setTimeout(() => signedOut(mk), 3000); return; }
+      // A fresh sign-in is not usable for /v1/me/… until Apple's sign-in service has set the session
+      // cookies (auth reflection). Home's /v1/me/recommendations before that answers 403, and MusicKit
+      // takes a 403 as "sign-in invalid" and signs out in the same second (seen with a Canadian account).
+      await sessionCookies(mk);
+      if (!mk.isAuthorized) return;
       cache.clear();
       if (signinEl) { signinEl.remove(); signinEl = null; nav.hidden = false; T.toast(T.t('Вы вошли в Apple Music')); }
       T.show();
@@ -1228,7 +1259,15 @@ h2 { font-size: 18px; font-weight: 600; margin: 0 48px 4px; color: #f2f2f5; whit
     s.page.append(h('h1', { style: 'margin-top:150px;text-align:center' }, 'Apple Music'),
       h('div', { class: 'msg', style: 'text-align:center' }, T.t('Откроется вход Apple: ↑ ↓ — выбрать поле или кнопку, OK — ввести или нажать.')),
       h('div', { class: 'row', style: 'display:flex;justify-content:center' },
-        h('div', { class: 'btn red f', onok: () => { T.hide(); T.mk().authorize().catch(() => {}); } }, T.t('Войти'))));
+        // Apple's own in-page sign-in (the site's Sign In button opens an idmsa frame on the page) keeps
+        // the session. MusicKit's authorize() popup hands over a token that the page drops in the same
+        // second (seen 5 of 5 times with a Canadian account; the in-page sign-in stuck 2 of 2).
+        h('div', { class: 'btn red f', onok: () => {
+          T.hide();
+          const b = [...document.querySelectorAll('button, a')].find((x) => /^\s*sign in\s*$/i.test(x.textContent || ''));
+          if (b) { b.click(); T.toast(T.t('Use the pointer to sign in on Apple\'s page; Back returns')); }
+          else T.mk().authorize().catch(() => {});
+        } }, T.t('Войти'))));
     T.focus(s.page.querySelector('.f'));
     T.splashDone();
   };
