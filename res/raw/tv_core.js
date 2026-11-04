@@ -281,10 +281,27 @@
     cache.set(key, { t: Date.now(), p: Promise.resolve(data) });
     try { localStorage.setItem(STORE + key, JSON.stringify(data)); } catch (e) { /* quota: just not kept */ }
   }
+  // Reads under /v1/me go straight to Apple with this page's own tokens (like T.send), not through
+  // MusicKit's api.music(): on a Canadian account /v1/me/recommendations answers 403, and MusicKit
+  // treats a 403 on a /v1/me call as "the sign-in is bad" and signs the user out the moment they
+  // signed in. A direct fetch just fails that one request and the screen falls back instead.
+  async function getDirect(path, params) {
+    const mk = T.mk();
+    const url = new URL('https://amp-api.music.apple.com' + path);
+    const q = Object.assign({ l: (mk && mk.storefrontId === 'ca') ? 'en-CA' : undefined, platform: 'web' }, params || {});
+    for (const k in q) if (q[k] !== undefined) url.searchParams.set(k, q[k]);
+    const r = await fetch(url, { cache: 'no-store',
+      headers: { Authorization: 'Bearer ' + mk.developerToken, 'Music-User-Token': mk.musicUserToken, Origin: 'https://music.apple.com' } });
+    if (!r.ok) throw { errorCode: r.status, status: r.status, message: r.statusText };
+    return r.json();
+  }
   function fetchFresh(key, path, params) {
     return (async () => {
       for (let i = 0; ; i++) {
-        try { return (await T.mk().api.music(path, params || {})).data; }
+        try {
+          if (/^\/v1\/me\//.test(path)) return await getDirect(path, params);
+          return (await T.mk().api.music(path, params || {})).data;
+        }
         catch (e) {
           if (i >= 2 || !/50\d|upstream/i.test(String(e && (e.errorCode || e.status || e.message)))) throw e;
           await new Promise(r => setTimeout(r, 400 * (i + 1)));
