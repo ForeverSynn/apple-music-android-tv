@@ -1,0 +1,56 @@
+name: Build APK
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android build-tools 36 and platform 36
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "build-tools;36.0.0" "platforms;android-36" >/dev/null
+
+      - name: Prepare signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.AMTV_KEYSTORE_B64 }}
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+            echo "Using the AMTV_KEYSTORE_B64 secret (stable signature; updates install in place)."
+          else
+            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android \
+              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=AMTV fork, O=lsheardo, C=CA"
+            echo "::warning::No AMTV_KEYSTORE_B64 secret: generated a one-off key. Add the secret so future builds can update in place."
+          fi
+
+      - name: Build
+        run: |
+          make all SDK="$ANDROID_SDK_ROOT" JAVA_HOME="$JAVA_HOME"
+          cp build/amtv.apk "build/amtv-${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}.apk"
+          sha256sum build/*.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amtv-apk
+          path: build/amtv-*.apk
+          if-no-files-found: error
+
+      - name: Release on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/amtv-*.apk
