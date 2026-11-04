@@ -191,7 +191,8 @@
 
   S.radio = function (s) {
     load(s, async () => {
-      const g = (await T.api('/v1/editorial/{sf}/groupings/168577', { platform: 'web', include: 'tabs',
+      // By name, like Browse: the grouping id differs per storefront (168577 is the US one; 404 in Canada).
+      const g = (await T.api('/v1/editorial/{sf}/groupings', { name: 'radio', platform: 'web', include: 'tabs',
         extend: 'editorialArtwork', 'limit[contents]': 12 }, 0, true)).data[0];
       const kids = rel(rel(g, 'tabs')[0], 'children').filter((k) => !/watch interviews/i.test(attrs(k).name || ''));
       return editorial(kids);

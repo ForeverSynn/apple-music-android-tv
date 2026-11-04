@@ -1086,6 +1086,15 @@ h2 { font-size: 18px; font-weight: 600; margin: 0 48px 4px; color: #f2f2f5; whit
     });
   }
 
+  // After a sign-in: Apple's sign-in service answered (authReflectionDidComplete), or 8 s passed.
+  function sessionCookies(mk) {
+    return new Promise((resolve) => {
+      const done = () => { clearTimeout(t); mk.removeEventListener('authReflectionDidComplete', done); resolve(); };
+      const t = setTimeout(done, 8000);
+      mk.addEventListener('authReflectionDidComplete', done);
+    });
+  }
+
   // The first play after launch also loads Apple's hls.js, starts the Widevine module and opens fresh
   // TLS connections to the playback hosts (each costly through the tunnel): do all that up front.
   // Idle connections close after a minute or two, so this also runs when focus rests on a station.
@@ -1188,10 +1197,15 @@ h2 { font-size: 18px; font-weight: 600; margin: 0 48px 4px; color: #f2f2f5; whit
     T.status(mk.isAuthorized ? T.t('Собираю главную…') : T.t('Нужен вход в Apple ID'));
     T.on('playbackStateDidChange', onState);
     onState();
-    T.on('authorizationStatusDidChange', () => {
+    T.on('authorizationStatusDidChange', async () => {
       diag(Object.assign({ ev: mk.isAuthorized ? 'signed-in' : 'signed-out' }, mkState(mk)));
       clearTimeout(outTimer);
       if (!mk.isAuthorized) { outTimer = setTimeout(() => signedOut(mk), 3000); return; }
+      // A fresh sign-in is not usable for /v1/me/… until Apple's sign-in service has set the session
+      // cookies (auth reflection). Home's /v1/me/recommendations before that answers 403, and MusicKit
+      // takes a 403 as "sign-in invalid" and signs out in the same second (seen with a Canadian account).
+      await sessionCookies(mk);
+      if (!mk.isAuthorized) return;
       cache.clear();
       if (signinEl) { signinEl.remove(); signinEl = null; nav.hidden = false; T.toast(T.t('Вы вошли в Apple Music')); }
       T.show();

@@ -60,7 +60,6 @@ public class MainActivity extends Activity {
     private FrameLayout pages;                                // the main page, popups on top
     private WebView web;
     private final ArrayList<WebView> popups = new ArrayList<>();
-    private static final long POPUP_CLOSE_DELAY_MS = 2500;   // see onCloseWindow
     private Cursor cursor;
     private String pageJs;
     private String signinJs;                                  // remote-friendly look for Apple's sign-in popup
@@ -522,7 +521,9 @@ public class MainActivity extends Activity {
         @Override
         public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
             if (r.isForMainFrame()) {
-                Log.i(TAG, "navigate " + r.getUrl() + " redirect=" + r.isRedirect() + " gesture=" + r.hasGesture());
+                // Without the query: sign-in URLs carry OAuth and Music User tokens, and logcat is readable over adb.
+                Uri nav = r.getUrl();
+                Log.i(TAG, "navigate " + nav.getScheme() + "://" + nav.getHost() + nav.getPath() + " redirect=" + r.isRedirect() + " gesture=" + r.hasGesture());
                 if (!pageReady) setStatus(str("status_opening"));
             }
             String scheme = r.getUrl().getScheme();
@@ -610,15 +611,7 @@ public class MainActivity extends Activity {
 
         @Override
         public void onCloseWindow(WebView w) {
-            // Apple's sign-in popup calls window.close() right after posting the token to the opener.
-            // If the popup WebView is destroyed at once, MusicKit on the main page sees "popup closed"
-            // before it has handled the message and treats the sign-in as cancelled: it fires
-            // auth/v2/web/logout in parallel with auth/v2/web, and the logout wins (403, signed out).
-            // Hide the popup now, but keep it alive briefly so the opener finishes first.
-            if (!popups.contains(w)) return;
-            w.setVisibility(View.GONE);
-            w.postDelayed(() -> close(w), POPUP_CLOSE_DELAY_MS);
-            Log.i(TAG, "popup close requested, destroying in " + POPUP_CLOSE_DELAY_MS + " ms");
+            close(w);
         }
     };
 
