@@ -521,7 +521,9 @@ public class MainActivity extends Activity {
         @Override
         public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
             if (r.isForMainFrame()) {
-                Log.i(TAG, "navigate " + r.getUrl() + " redirect=" + r.isRedirect() + " gesture=" + r.hasGesture());
+                // Without the query: sign-in URLs carry OAuth and Music User tokens, and logcat is readable over adb.
+                Uri nav = r.getUrl();
+                Log.i(TAG, "navigate " + nav.getScheme() + "://" + nav.getHost() + nav.getPath() + " redirect=" + r.isRedirect() + " gesture=" + r.hasGesture());
                 if (!pageReady) setStatus(str("status_opening"));
             }
             String scheme = r.getUrl().getScheme();

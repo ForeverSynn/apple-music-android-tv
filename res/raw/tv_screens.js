@@ -143,7 +143,23 @@
 
   S.home = function (s) {
     load(s, async () => {
-      const recs = (await T.api('/v1/me/recommendations', { limit: 20, 'include[personal-recommendation]': 'contents' }, 0, true)).data || [];
+      // Recommendations can be refused (403) for some accounts/storefronts; the Home screen then
+      // shows recently played and the storefront charts instead of failing or signing out.
+      let recs = [];
+      try { recs = (await T.api('/v1/me/recommendations', { limit: 20, 'include[personal-recommendation]': 'contents' }, 0, true)).data || []; }
+      catch (e) {
+        const out = [];
+        try {
+          const recent = (await T.api('/v1/me/recent/played', { limit: 10 }, 0, true)).data || [];
+          if (recent.length) out.push(T.shelf(T.t('Recently played'), recent.filter(notVideo), { w: 130 }));
+        } catch (e2) {}
+        try {
+          const charts = ((await T.api('/v1/catalog/{sf}/charts', { types: 'albums,playlists', limit: 20 }, 0, true)) || {}).results || {};
+          for (const kind of ['albums', 'playlists'])
+            for (const c of (charts[kind] || [])) if (c.data && c.data.length) out.push(T.shelf(c.name || kind, c.data, { w: 130 }));
+        } catch (e3) {}
+        return out;
+      }
       const rows = recs.map((r) => ({ title: T.title(r), kind: attrs(r).kind, items: rel(r, 'contents').filter(notVideo) }))
         .filter((r) => r.items.length);
       // "Top picks": the lead item of each recommendation row, captioned with that row's title.
@@ -175,7 +191,8 @@
 
   S.radio = function (s) {
     load(s, async () => {
-      const g = (await T.api('/v1/editorial/{sf}/groupings/168577', { platform: 'web', include: 'tabs',
+      // By name, like Browse: the grouping id differs per storefront (168577 is the US one; 404 in Canada).
+      const g = (await T.api('/v1/editorial/{sf}/groupings', { name: 'radio', platform: 'web', include: 'tabs',
         extend: 'editorialArtwork', 'limit[contents]': 12 }, 0, true)).data[0];
       const kids = rel(rel(g, 'tabs')[0], 'children').filter((k) => !/watch interviews/i.test(attrs(k).name || ''));
       return editorial(kids);
